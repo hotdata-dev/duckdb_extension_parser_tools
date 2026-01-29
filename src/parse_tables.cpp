@@ -7,9 +7,13 @@
 #include "duckdb/parser/statement/select_statement.hpp"
 #include "duckdb/parser/query_node/select_node.hpp"
 #include "duckdb/parser/query_node/cte_node.hpp"
+#include "duckdb/parser/query_node/set_operation_node.hpp"
+#include "duckdb/parser/result_modifier.hpp"
 #include "duckdb/parser/tableref/basetableref.hpp"
 #include "duckdb/parser/tableref/joinref.hpp"
 #include "duckdb/parser/tableref/subqueryref.hpp"
+#include "duckdb/parser/expression/subquery_expression.hpp"
+#include "duckdb/parser/parsed_expression_iterator.hpp"
 #include "duckdb/function/scalar/nested_functions.hpp"
 
 namespace duckdb {
@@ -73,6 +77,13 @@ static unique_ptr<GlobalTableFunctionState> ParseTablesInit(ClientContext &conte
     return make_uniq<ParseTablesState>();
 }
 
+// Forward declaration for mutual recursion
+static void ExtractTablesFromExpression(
+    const duckdb::ParsedExpression &expr,
+    std::vector<TableRefResult> &results,
+    const duckdb::CommonTableExpressionMap *cte_map
+);
+
 static void ExtractTablesFromRef(
     const duckdb::TableRef &ref,
     std::vector<TableRefResult> &results,
@@ -104,6 +115,10 @@ static void ExtractTablesFromRef(
             auto &join = (JoinRef &)ref;
             ExtractTablesFromRef(*join.left, results, TableContext::JoinLeft, is_top_level, cte_map);
             ExtractTablesFromRef(*join.right, results, TableContext::JoinRight, false, cte_map);
+            // Process JOIN condition for subqueries
+            if (join.condition) {
+                ExtractTablesFromExpression(*join.condition, results, cte_map);
+            }
             break;
         }
         case TableReferenceType::SUBQUERY: {
@@ -118,6 +133,33 @@ static void ExtractTablesFromRef(
     }
 }
 
+// Extract tables from expressions that may contain subqueries (WHERE, HAVING, SELECT list, etc.)
+static void ExtractTablesFromExpression(
+    const duckdb::ParsedExpression &expr,
+    std::vector<TableRefResult> &results,
+    const duckdb::CommonTableExpressionMap *cte_map
+) {
+    using namespace duckdb;
+
+    // Check if this is a subquery expression
+    if (expr.GetExpressionClass() == ExpressionClass::SUBQUERY) {
+        auto &subquery_expr = (const SubqueryExpression &)expr;
+        if (subquery_expr.subquery && subquery_expr.subquery->node) {
+            ExtractTablesFromQueryNode(*subquery_expr.subquery->node, results, TableContext::Subquery, cte_map);
+        }
+        // Also process the child expression (e.g., the left side of IN)
+        if (subquery_expr.child) {
+            ExtractTablesFromExpression(*subquery_expr.child, results, cte_map);
+        }
+        return;
+    }
+
+    // Recursively process child expressions
+    ParsedExpressionIterator::EnumerateChildren(expr,
+        [&](const ParsedExpression &child) {
+            ExtractTablesFromExpression(child, results, cte_map);
+        });
+}
 
 static void ExtractTablesFromQueryNode(
     const duckdb::QueryNode &node,
@@ -144,13 +186,73 @@ static void ExtractTablesFromQueryNode(
         if (select_node.from_table) {
             ExtractTablesFromRef(*select_node.from_table, results, context, true, &select_node.cte_map);
         }
-    } 
+
+        // Extract tables from WHERE clause subqueries
+        if (select_node.where_clause) {
+            ExtractTablesFromExpression(*select_node.where_clause, results, &select_node.cte_map);
+        }
+
+        // Extract tables from SELECT list subqueries
+        for (const auto &expr : select_node.select_list) {
+            if (expr) {
+                ExtractTablesFromExpression(*expr, results, &select_node.cte_map);
+            }
+        }
+
+        // Extract tables from HAVING clause subqueries
+        if (select_node.having) {
+            ExtractTablesFromExpression(*select_node.having, results, &select_node.cte_map);
+        }
+
+        // Extract tables from QUALIFY clause subqueries
+        if (select_node.qualify) {
+            ExtractTablesFromExpression(*select_node.qualify, results, &select_node.cte_map);
+        }
+
+        // Extract tables from GROUP BY expressions
+        for (const auto &expr : select_node.groups.group_expressions) {
+            if (expr) {
+                ExtractTablesFromExpression(*expr, results, &select_node.cte_map);
+            }
+        }
+    }
     // additional step necessary for duckdb v1.4.0: unwrap CTE node
     else if (node.type == QueryNodeType::CTE_NODE) {
         auto &cte_node = (CTENode &)node;
 
         if (cte_node.child) {
             ExtractTablesFromQueryNode(*cte_node.child, results, context, cte_map);
+        }
+    }
+    // Handle UNION/INTERSECT/EXCEPT (set operations)
+    else if (node.type == QueryNodeType::SET_OPERATION_NODE) {
+        auto &set_node = (SetOperationNode &)node;
+
+        if (set_node.left) {
+            ExtractTablesFromQueryNode(*set_node.left, results, context, cte_map);
+        }
+        if (set_node.right) {
+            ExtractTablesFromQueryNode(*set_node.right, results, context, cte_map);
+        }
+    }
+
+    // Process result modifiers (ORDER BY, LIMIT) for all node types
+    for (const auto &modifier : node.modifiers) {
+        if (modifier->type == ResultModifierType::ORDER_MODIFIER) {
+            auto &order_modifier = (OrderModifier &)*modifier;
+            for (const auto &order : order_modifier.orders) {
+                if (order.expression) {
+                    ExtractTablesFromExpression(*order.expression, results, cte_map);
+                }
+            }
+        } else if (modifier->type == ResultModifierType::LIMIT_MODIFIER) {
+            auto &limit_modifier = (LimitModifier &)*modifier;
+            if (limit_modifier.limit) {
+                ExtractTablesFromExpression(*limit_modifier.limit, results, cte_map);
+            }
+            if (limit_modifier.offset) {
+                ExtractTablesFromExpression(*limit_modifier.offset, results, cte_map);
+            }
         }
     }
 }
