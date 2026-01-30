@@ -12,19 +12,10 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # TODO: Re-enable once compatible with DuckDB main (SetOperationNode API change)
-  # duckdb-next-build:
-  #  name: Build extension binaries
-  #  uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@main
-  #  with:
-  #    duckdb_version: main
-  #    ci_tools_version: main
-  #    extension_name: parser_tools
-
-  duckdb-stable-build:
+  duckdb-next-build:
     name: Build extension binaries
-    uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@v1.4.4
+    uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@main
     with:
-      duckdb_version: v1.4.4
-      ci_tools_version: v1.4.4
+      duckdb_version: main
+      ci_tools_version: main
       extension_name: parser_tools
