@@ -29,6 +29,41 @@ SELECT list_filter(parse_tables('select * from MyTable t inner join Other o on o
 ----
 [{'schema': main, 'table': MyTable, 'context': from}]
 
+# subquery in WHERE clause (IN)
+query I
+SELECT parse_tables('SELECT * FROM schema1.users WHERE id IN (SELECT user_id FROM schema2.orders)');
+----
+[{'schema': schema1, 'table': users, 'context': from}, {'schema': schema2, 'table': orders, 'context': from}]
+
+# subquery in WHERE clause (EXISTS)
+query I
+SELECT parse_tables('SELECT * FROM users WHERE EXISTS (SELECT 1 FROM orders WHERE orders.user_id = users.id)');
+----
+[{'schema': main, 'table': users, 'context': from}, {'schema': main, 'table': orders, 'context': from}]
+
+# deeply nested expression subqueries
+query I
+SELECT parse_tables('SELECT * FROM t1 WHERE a IN (SELECT x FROM t2 WHERE b IN (SELECT y FROM t3))');
+----
+[{'schema': main, 'table': t1, 'context': from}, {'schema': main, 'table': t2, 'context': from}, {'schema': main, 'table': t3, 'context': from}]
+
+# NOT IN subquery
+query I
+SELECT parse_tables('SELECT * FROM t1 WHERE id NOT IN (SELECT id FROM t2)');
+----
+[{'schema': main, 'table': t1, 'context': from}, {'schema': main, 'table': t2, 'context': from}]
+
+# subquery in HAVING clause
+query I
+SELECT parse_tables('SELECT user_id, COUNT(*) FROM orders GROUP BY user_id HAVING COUNT(*) > (SELECT AVG(order_count) FROM stats)');
+----
+[{'schema': main, 'table': orders, 'context': from}, {'schema': main, 'table': stats, 'context': from}]
+
+# subquery in QUALIFY clause
+query I
+SELECT parse_tables('SELECT * FROM t1 QUALIFY row_number() OVER() > (SELECT COUNT(*) FROM t2)');
+----
+[{'schema': main, 'table': t1, 'context': from}, {'schema': main, 'table': t2, 'context': from}]
 
 # Unsupported 
 # -----------

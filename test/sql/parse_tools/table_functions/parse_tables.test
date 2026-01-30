@@ -80,10 +80,129 @@ $$);
 main	k	from
 main	l	from
 
-# INSERT INTO ... SELECT
+# subquery in WHERE clause (IN)
 query III
-SELECT * FROM parse_tables('INSERT INTO m SELECT * FROM n;');
+SELECT * FROM parse_tables('SELECT * FROM schema1.users WHERE id IN (SELECT user_id FROM schema2.orders);');
 ----
+schema1	users	from
+schema2	orders	from
+
+# subquery in WHERE clause (EXISTS)
+query III
+SELECT * FROM parse_tables('SELECT * FROM users WHERE EXISTS (SELECT 1 FROM orders WHERE orders.user_id = users.id);');
+----
+main	users	from
+main	orders	from
+
+# subquery in SELECT list (scalar subquery)
+query III
+SELECT * FROM parse_tables('SELECT id, (SELECT COUNT(*) FROM orders WHERE orders.user_id = users.id) AS order_count FROM users;');
+----
+main	users	from
+main	orders	from
+
+# multiple subqueries in WHERE
+query III
+SELECT * FROM parse_tables('SELECT * FROM t1 WHERE a IN (SELECT x FROM t2) AND b IN (SELECT y FROM t3);');
+----
+main	t1	from
+main	t2	from
+main	t3	from
+
+# deeply nested expression subqueries
+query III
+SELECT * FROM parse_tables('SELECT * FROM t1 WHERE a IN (SELECT x FROM t2 WHERE b IN (SELECT y FROM t3));');
+----
+main	t1	from
+main	t2	from
+main	t3	from
+
+# NOT IN subquery
+query III
+SELECT * FROM parse_tables('SELECT * FROM t1 WHERE id NOT IN (SELECT id FROM t2);');
+----
+main	t1	from
+main	t2	from
+
+# NOT EXISTS subquery
+query III
+SELECT * FROM parse_tables('SELECT * FROM users WHERE NOT EXISTS (SELECT 1 FROM banned WHERE banned.user_id = users.id);');
+----
+main	users	from
+main	banned	from
+
+# subquery in HAVING clause
+query III
+SELECT * FROM parse_tables('SELECT user_id, COUNT(*) FROM orders GROUP BY user_id HAVING COUNT(*) > (SELECT AVG(order_count) FROM stats);');
+----
+main	orders	from
+main	stats	from
+
+# subquery in QUALIFY clause
+query III
+SELECT * FROM parse_tables('SELECT * FROM t1 QUALIFY row_number() OVER() > (SELECT COUNT(*) FROM t2);');
+----
+main	t1	from
+main	t2	from
+
+# CASE WHEN with subquery
+query III
+SELECT * FROM parse_tables('SELECT CASE WHEN (SELECT COUNT(*) FROM t2) > 0 THEN 1 ELSE 0 END FROM t1;');
+----
+main	t1	from
+main	t2	from
+
+# UNION query
+query III
+SELECT * FROM parse_tables('SELECT * FROM t1 UNION SELECT * FROM t2;');
+----
+main	t1	from
+main	t2	from
+
+# UNION ALL query
+query III
+SELECT * FROM parse_tables('SELECT * FROM t1 UNION ALL SELECT * FROM t2;');
+----
+main	t1	from
+main	t2	from
+
+# INTERSECT query
+query III
+SELECT * FROM parse_tables('SELECT * FROM t1 INTERSECT SELECT * FROM t2;');
+----
+main	t1	from
+main	t2	from
+
+# EXCEPT query
+query III
+SELECT * FROM parse_tables('SELECT * FROM t1 EXCEPT SELECT * FROM t2;');
+----
+main	t1	from
+main	t2	from
+
+# subquery in JOIN condition
+query III
+SELECT * FROM parse_tables('SELECT * FROM t1 JOIN t2 ON t1.id = (SELECT MAX(id) FROM t3);');
+----
+main	t1	from
+main	t2	join_right
+main	t3	from
+
+# subquery in GROUP BY (rare but valid)
+query III
+SELECT * FROM parse_tables('SELECT COUNT(*) FROM t1 GROUP BY (SELECT 1 FROM t2 LIMIT 1);');
+----
+main	t1	from
+main	t2	from
+
+# subquery in ORDER BY
+query III
+SELECT * FROM parse_tables('SELECT * FROM t1 ORDER BY (SELECT COUNT(*) FROM t2);');
+----
+main	t1	from
+main	t2	from
+
+# INSERT INTO ... SELECT
 
 # UPDATE with FROM
 query III
