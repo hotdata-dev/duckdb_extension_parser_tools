@@ -74,3 +74,21 @@ query I
 SELECT parse_tables('SELECT * FROM WHERE');
 ----
 []
+
+# WHERE clause subquery
+query I
+SELECT parse_tables('SELECT * FROM users WHERE id IN (SELECT user_id FROM orders)');
+----
+[{'schema': main, 'table': users, 'context': from}, {'schema': main, 'table': orders, 'context': subquery}]
+
+# nested subqueries
+query I
+SELECT parse_tables('SELECT * FROM a WHERE x IN (SELECT y FROM b WHERE z IN (SELECT w FROM c))');
+----
+[{'schema': main, 'table': a, 'context': from}, {'schema': main, 'table': b, 'context': subquery}, {'schema': main, 'table': c, 'context': subquery}]
+
+# multiple contexts with subqueries
+query I
+SELECT parse_tables('SELECT (SELECT max(x) FROM b) FROM a WHERE y IN (SELECT z FROM c)');
+----
+[{'schema': main, 'table': a, 'context': from}, {'schema': main, 'table': b, 'context': subquery}, {'schema': main, 'table': c, 'context': subquery}]

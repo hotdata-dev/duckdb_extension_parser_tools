@@ -114,3 +114,54 @@ SELECT * FROM parse_tables('SELECT 1;');
 query III
 SELECT * FROM parse_tables('SELECT * FROM WHERE');
 ----
+
+# WHERE clause subquery
+query III
+SELECT * FROM parse_tables('SELECT * FROM users WHERE id IN (SELECT user_id FROM orders)');
+----
+main	users	from
+main	orders	subquery
+
+# WHERE clause with schema-qualified subquery
+query III
+SELECT * FROM parse_tables('SELECT * FROM schema1.users WHERE id IN (SELECT user_id FROM schema2.orders)');
+----
+schema1	users	from
+schema2	orders	subquery
+
+# nested subqueries in WHERE
+query III
+SELECT * FROM parse_tables('SELECT * FROM a WHERE x IN (SELECT y FROM b WHERE z IN (SELECT w FROM c))');
+----
+main	a	from
+main	b	subquery
+main	c	subquery
+
+# SELECT list subquery (scalar subquery)
+query III
+SELECT * FROM parse_tables('SELECT id, (SELECT max(price) FROM products) AS max_price FROM orders');
+----
+main	orders	from
+main	products	subquery
+
+# HAVING clause subquery
+query III
+SELECT * FROM parse_tables('SELECT dept FROM employees GROUP BY dept HAVING count(*) > (SELECT avg(cnt) FROM dept_sizes)');
+----
+main	employees	from
+main	dept_sizes	subquery
+
+# JOIN condition subquery
+query III
+SELECT * FROM parse_tables('SELECT * FROM a JOIN b ON a.id = b.id AND b.status IN (SELECT code FROM statuses)');
+----
+main	a	from
+main	b	join_right
+main	statuses	subquery
+
+# ORDER BY clause subquery
+query III
+SELECT * FROM parse_tables('SELECT * FROM users ORDER BY (SELECT max(score) FROM rankings WHERE user_id = users.id)');
+----
+main	users	from
+main	rankings	subquery
