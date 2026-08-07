@@ -228,11 +228,10 @@ static void ExtractTablesFromQueryNode(
     else if (node.type == QueryNodeType::SET_OPERATION_NODE) {
         auto &set_node = (SetOperationNode &)node;
 
-        if (set_node.left) {
-            ExtractTablesFromQueryNode(*set_node.left, results, context, cte_map);
-        }
-        if (set_node.right) {
-            ExtractTablesFromQueryNode(*set_node.right, results, context, cte_map);
+        for (auto &child : set_node.children) {
+            if (child) {
+                ExtractTablesFromQueryNode(*child, results, context, cte_map);
+            }
         }
     }
 
