@@ -5,9 +5,13 @@
 #include "duckdb/parser/query_node/cte_node.hpp"
 #include "duckdb/parser/query_node/select_node.hpp"
 #include "duckdb/parser/expression/function_expression.hpp"
+#include "duckdb/parser/expression/subquery_expression.hpp"
 #include "duckdb/parser/expression/window_expression.hpp"
 #include "duckdb/parser/parsed_expression_iterator.hpp"
 #include "duckdb/parser/result_modifier.hpp"
+#include "duckdb/parser/tableref/joinref.hpp"
+#include "duckdb/parser/tableref/subqueryref.hpp"
+#include "duckdb/parser/tableref/table_function_ref.hpp"
 #include "duckdb/function/scalar/nested_functions.hpp"
 
 
@@ -72,6 +76,8 @@ static unique_ptr<GlobalTableFunctionState> ParseFunctionsInit(ClientContext &co
 																														TableFunctionInitInput &input) {
 	return make_uniq<ParseFunctionsState>();
 }
+
+static void ExtractFunctionsFromQueryNode(const QueryNode &node, std::vector<FunctionResult> &results);
 
 class FunctionExtractor {
 public:
@@ -144,6 +150,14 @@ public:
 			if (window_expr.filter_expr) {
 				ExtractFromExpression(*window_expr.filter_expr, results, FunctionContext::Nested);
 			}
+		} else if (expr.expression_class == ExpressionClass::SUBQUERY) {
+			auto &subquery = (SubqueryExpression &)expr;
+			if (subquery.child) {
+				ExtractFromExpression(*subquery.child, results, context);
+			}
+			if (subquery.subquery && subquery.subquery->node) {
+				ExtractFunctionsFromQueryNode(*subquery.subquery->node, results);
+			}
 		} else {
 			// For non-function expressions, preserve the current context
 			ParsedExpressionIterator::EnumerateChildren(expr, [&](const ParsedExpression &child) {
@@ -163,6 +177,44 @@ public:
 	}
 };
 
+static void ExtractFunctionsFromRef(const TableRef &ref, std::vector<FunctionResult> &results) {
+	switch (ref.type) {
+	case TableReferenceType::JOIN: {
+		auto &join = (JoinRef &)ref;
+		if (join.left) {
+			ExtractFunctionsFromRef(*join.left, results);
+		}
+		if (join.right) {
+			ExtractFunctionsFromRef(*join.right, results);
+		}
+		if (join.condition) {
+			FunctionExtractor::ExtractFromExpression(*join.condition, results, FunctionContext::Join);
+		}
+		break;
+	}
+	case TableReferenceType::SUBQUERY: {
+		auto &subquery = (SubqueryRef &)ref;
+		if (subquery.subquery && subquery.subquery->node) {
+			ExtractFunctionsFromQueryNode(*subquery.subquery->node, results);
+		}
+		break;
+	}
+	case TableReferenceType::TABLE_FUNCTION: {
+		auto &table_function = (TableFunctionRef &)ref;
+		if (table_function.function) {
+			ParsedExpressionIterator::EnumerateChildren(*table_function.function, [&](const ParsedExpression &child) {
+				FunctionExtractor::ExtractFromExpression(child, results, FunctionContext::Nested);
+			});
+		}
+		if (table_function.subquery && table_function.subquery->node) {
+			ExtractFunctionsFromQueryNode(*table_function.subquery->node, results);
+		}
+		break;
+	}
+	default:
+		break;
+	}
+}
 
 static void ExtractFunctionsFromQueryNode(const QueryNode &node, std::vector<FunctionResult> &results) {
 	if (node.type == QueryNodeType::SELECT_NODE) {
@@ -201,6 +253,10 @@ static void ExtractFunctionsFromQueryNode(const QueryNode &node, std::vector<Fun
 					}
 				}
 			}
+		}
+
+		if (select_node.from_table) {
+			ExtractFunctionsFromRef(*select_node.from_table, results);
 		}
 	// additional step necessary for duckdb v1.4.0: unwrap CTE node
 	}  else if (node.type == QueryNodeType::CTE_NODE) {

@@ -77,6 +77,28 @@ SELECT parse_functions('WITH ranked AS (SELECT name, rank() OVER (ORDER BY salar
 ----
 [{'function_name': rank, 'schema': main, 'context': select}, {'function_name': upper, 'schema': main, 'context': select}]
 
+# functions in FROM subqueries, joins, and table function arguments
+query I
+SELECT parse_functions('SELECT * FROM (SELECT avg(n) AS a FROM range(5) t(n)) s');
+----
+[{'function_name': avg, 'schema': main, 'context': select}]
+
+query I
+SELECT parse_functions('SELECT * FROM (SELECT upper(x) FROM t) a JOIN (SELECT lower(y) FROM u) b ON true');
+----
+[{'function_name': upper, 'schema': main, 'context': select}, {'function_name': lower, 'schema': main, 'context': select}]
+
+query I
+SELECT parse_functions('SELECT * FROM range(abs(-5))');
+----
+[{'function_name': abs, 'schema': main, 'context': nested}]
+
+# scalar subqueries
+query I
+SELECT parse_functions('SELECT (SELECT sum(1)) WHERE x IN (SELECT length(z) FROM v)');
+----
+[{'function_name': sum, 'schema': main, 'context': select}, {'function_name': length, 'schema': main, 'context': select}]
+
 # no functions
 query I
 SELECT parse_functions('SELECT name, age FROM users;');
